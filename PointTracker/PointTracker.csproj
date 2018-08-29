@@ -71,6 +71,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="DataWriter.cs" />
     <Compile Include="Extensions.cs" />
     <Compile Include="CmCalculator.cs" />
     <Compile Include="Program.cs" />

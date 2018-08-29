@@ -69,7 +69,7 @@ namespace PointTracker
             // Toe 391 355 405 366
             ("Foot", RectPoints(391, 355, 405, 366)),
         };
-
+        
         /// <summary>
         /// Template boxes in the HD frame
         /// </summary>
@@ -134,9 +134,11 @@ namespace PointTracker
         public static void Main(string[] args)
         {   
             var pictureDir = args[0];
+            var outDir = Path.Combine(pictureDir, "out");
+            var csvPath = outDir;
             var frame1Path = Path.Combine(pictureDir, "01.jpg");
             var frame1 = Image.FromFile(frame1Path);
-
+            
             var boxes = BoxesHD;
             var crop = HDCrop;
             var ppcm = HdPixelsPerCentimeter;
@@ -148,6 +150,9 @@ namespace PointTracker
                 ppcm = SdPixelsPerCentimeter;
             }
 
+            var csv = new DataWriter(csvPath, crop, ppcm, "global", "ankle", 
+                "knee", "hip");
+            
             var names = new List<string>();
             var trackers = new List<MatchingTracker>();
             var rects = new List<RectangleF>();
@@ -155,7 +160,7 @@ namespace PointTracker
             foreach (var (name, box) in boxes)
             {
                 var template = frame1.Clone(box, frame1.PixelFormat);
-                var tracker = new MatchingTracker()
+                var tracker = new MatchingTracker
                 {
                     Template = template,
                     Threshold = 0.8,
@@ -207,6 +212,17 @@ namespace PointTracker
                 }
 
                 pcmCalculator.Update(names, rects);
+                var pcms = pcmCalculator.GetPcms();
+                var (gcm, gWeight) = pcmCalculator.GetGcm();
+                var (anklePcm, ankleWeight) = pcmCalculator.GetAnklePcm();
+                var (kneePcm, kneeWeight) = pcmCalculator.GetKneePcm();
+                var (hipPcm, hipWeight) = pcmCalculator.GetHipPcm();
+                
+                csv.WriteFrame("global", i, gcm, gWeight);
+                
+                csv.WriteFrame("ankle", i, anklePcm, ankleWeight, pcmCalculator.GetLocation("Ankle"));
+                csv.WriteFrame("knee", i, kneePcm, kneeWeight, pcmCalculator.GetLocation("Knee"));
+                csv.WriteFrame("hip", i, hipPcm, hipWeight, pcmCalculator.GetLocation("Hip"));
                 
                 // Draw resulting rectangles
                 using (var g = Graphics.FromImage(frame))
@@ -223,7 +239,6 @@ namespace PointTracker
                         g.DrawLine(StickPen, points[j], points[j+1]);
                     }
 
-                    var (pcms, gcm) = pcmCalculator.Get();
                     foreach (var kv in pcms)
                     {
                         DrawPoint(g, Brushes.Red, kv.Value, 2);
@@ -232,11 +247,13 @@ namespace PointTracker
                     DrawPoint(g, Brushes.Orange, gcm, 4);
                 }
                 
-                var outFile = Path.Combine(pictureDir, "out", $"{ii}_annotated.jpg");
+                var outFile = Path.Combine(outDir, $"{ii}_annotated.jpg");
                 var frameCrop = frame.Clone(crop, frame.PixelFormat);
                 //DrawGrid(frameCrop, 20 * ppcm);
                 frameCrop.Save(outFile);
             }
+            
+            csv.Dispose();
         }
 
         private static void DrawPoint(Graphics g, Brush brush, PointF center, float radius = 1)

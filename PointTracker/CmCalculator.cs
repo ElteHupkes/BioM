@@ -67,6 +67,14 @@ namespace PointTracker
         /// </summary>
         private readonly Dictionary<string, PointF> _locs = new Dictionary<string, PointF>();
 
+        /// <summary>
+        /// Last calculated PCMs
+        /// </summary>
+        private Dictionary<string, PointF> _lastPcms;
+        
+        /// <summary>
+        /// Absolute weights of the several body parts
+        /// </summary>
         private readonly Dictionary<string, double> _weights;
         
         public CmCalculator()
@@ -91,8 +99,103 @@ namespace PointTracker
         /// as well as a separate global center of mass point.
         /// </summary>
         /// <returns></returns>
-        public (Dictionary<string, PointF>, PointF) Get()
+        public Dictionary<string, PointF> GetPcms()
         {
+            return _lastPcms;
+        }
+
+        /// <summary>
+        /// Returns the last registered location of the given
+        /// registered part.
+        /// </summary>
+        /// <param name="part"></param>
+        /// <returns></returns>
+        public PointF GetLocation(string part)
+        {
+            return _locs[part];
+        }
+        
+        /// <summary>
+        /// Returns the global center of mass
+        /// </summary>
+        /// <returns></returns>
+        public (PointF Point, double Weight) GetGcm()
+        {
+            return FreeBodyPcm(_lastPcms.Keys.ToArray());
+        }
+        
+        /// <summary>
+        /// Partial center of mass for the free body above the ankle
+        /// </summary>
+        /// <returns></returns>
+        public (PointF Point, double Weight) GetAnklePcm()
+        {
+            return FreeBodyPcm("Head", "UpperArm", "Forearm", "Hand", "Trunk", 
+                "Thigh", "Shank");
+        }
+        
+        /// <summary>
+        /// Partial center of mass for the free body above the knee
+        /// </summary>
+        /// <returns></returns>
+        public (PointF Point, double Weight) GetKneePcm()
+        {
+            return FreeBodyPcm("Head", "UpperArm", "Forearm", "Hand", 
+                "Trunk", "Thigh");
+        }
+        
+        /// <summary>
+        /// Partial center of mass for the free body above the hip
+        /// </summary>
+        /// <returns></returns>
+        public (PointF Point, double Weight) GetHipPcm()
+        {
+            return FreeBodyPcm("Head", "UpperArm", "Forearm", "Hand", "Trunk");
+        }
+        
+        /// <summary>
+        /// Calculates the free body center of mass of the given
+        /// body parts.
+        /// </summary>
+        /// <param name="parts"></param>
+        /// <returns></returns>
+        public (PointF Point, double Weight) FreeBodyPcm(params string[] parts)
+        {
+            var pcms = _lastPcms;
+            var select = pcms.Where(kvp => parts.Contains(kvp.Key)).ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+            var totalWeight = select.Keys.Select(key => _weights[key]).Sum();
+            
+            var cm = select.Aggregate(new PointF(0, 0), (current, kvp) =>
+            {
+                var weight = _weights[kvp.Key];
+                return current.Add(kvp.Value.Mult((float) weight));
+            }).Div((float)totalWeight);
+
+            return (cm, totalWeight);
+        }
+        
+        /// <summary>
+        /// Helper function to traverse a certain distance between two vectors
+        /// </summary>
+        /// <param name="from"></param>
+        /// <param name="to"></param>
+        /// <param name="frac"></param>
+        /// <returns></returns>
+        private static PointF Walk(PointF from, PointF to, float frac)
+        {
+            return from.Add(to.Sub(from).Mult(frac));
+        }
+        
+        /// <summary>
+        /// 
+        /// </summary>
+        public void Update(List<string> names, List<RectangleF> rects)
+        {
+            for (var i = 0; i < names.Count; ++i)
+            {
+                _locs[names[i]] = rects[i].Center();
+            }
+            
             var lWrist = _locs["Wrist"];
             var lElbow = _locs["Elbow"];
             var lShoulder = _locs["Shoulder"];
@@ -125,7 +228,7 @@ namespace PointTracker
             // Foot
             var foot = lFoot.Add(new PointF(0.4014f * 50 - 40, 0));
             
-            var pcms = new Dictionary<string, PointF>()
+            _lastPcms = new Dictionary<string, PointF>()
             {
                 {"Head", head},
                 {"UpperArm", upperArm},
@@ -136,30 +239,6 @@ namespace PointTracker
                 {"Shank", shank},
                 {"Foot", foot}
             };
-
-            var gcm = pcms.Aggregate(new PointF(0, 0), (current, kvp) =>
-            {
-                var weight = _weights[kvp.Key];
-                return current.Add(kvp.Value.Mult((float) weight));
-            }).Div((float)TotalWeight);
-
-            return (pcms, gcm);
-        }
-
-        private static PointF Walk(PointF from, PointF to, float frac)
-        {
-            return from.Add(to.Sub(from).Mult(frac));
-        }
-        
-        /// <summary>
-        /// 
-        /// </summary>
-        public void Update(List<string> names, List<RectangleF> rects)
-        {
-            for (var i = 0; i < names.Count; ++i)
-            {
-                _locs[names[i]] = rects[i].Center();
-            }
         }
     }
 }
