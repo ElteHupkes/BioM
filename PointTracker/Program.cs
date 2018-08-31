@@ -109,7 +109,7 @@ namespace PointTracker
         /// <summary>
         /// Stick figure pen
         /// </summary>
-        private static readonly Pen StickPen = new Pen(Color.Chartreuse, 1);
+        private static readonly Pen StickPen = new Pen(Color.Chartreuse, 2);
         
         /// <summary>
         /// Rectangle from four annotation points
@@ -168,7 +168,10 @@ namespace PointTracker
                 };
 
                 trackers.Add(tracker);
-                rects.Add(box);
+                
+                // Adjust the box to track to the crop we'll apply on the image
+                var adjustedBox = new RectangleF(box.Left - crop.Left, box.Top - crop.Top, box.Width, box.Height);
+                rects.Add(adjustedBox);
                 names.Add(name);
             }
             
@@ -176,26 +179,40 @@ namespace PointTracker
             var pcmCalculator = new CmCalculator();
             
             for (var i = 1; i <= NumFrames; ++i)
-            {
+            {   
                 var ii = $"{i}".PadLeft(2, '0');
                 var file = $"{ii}.jpg";
                 var fullPath = Path.Combine(pictureDir, file);
-                var frame = Image.FromFile(fullPath);
 
-                var totalWidth = frame.Width;
-                var totalHeight = frame.Height;
-                var tw = 0.2f * totalWidth;
-                var th = 0.2f * totalHeight;
+                Bitmap frameCrop;
+                using (var frame = Image.FromFile(fullPath))
+                {
+                    frameCrop = frame.Clone(crop, frame.PixelFormat);
+                }
+                
+                // Create the output image that we'll draw on, which
+                // is a fully white image.
+                var output = new Bitmap(frameCrop.Width, frameCrop.Height, frameCrop.PixelFormat);
+                using (var g = Graphics.FromImage(output))
+                {
+                    g.FillRectangle(Brushes.White, 0, 0, output.Width, output.Height);
+                }
+                
+                var totalWidth = frameCrop.Width;
+                var totalHeight = frameCrop.Height;
+                var tw = 0.25f * totalWidth;
+                var th = 0.25f * totalHeight;
                 
                 // Track all objects in the frame
-                using (var unmanaged = UnmanagedImage.FromManagedImage(frame))
+                using (var unmanaged = UnmanagedImage.FromManagedImage(frameCrop))
                 {                    
                     for (var j = 0; j < trackers.Count; j++)
                     {
                         var rect = rects[j];
                         var tracker = trackers[j];
                         
-                        // Set the search window to 5 times the current size in each direction
+                        // Set the search window to its position + 25% the total width / height in
+                        // each direction.
                         var center = rect.Center();
                         tracker.SearchWindow = new Rectangle(IntRound(center.X - 0.5f * tw),
                             IntRound(center.Y - 0.5f * th), IntRound(tw), IntRound(th));
@@ -225,32 +242,43 @@ namespace PointTracker
                 csv.WriteFrame("hip", i, hipPcm, hipWeight, pcmCalculator.GetLocation("Hip"));
                 
                 // Draw resulting rectangles
-                using (var g = Graphics.FromImage(frame))
+                using (var g = Graphics.FromImage(output))
                 {
-                    foreach (var rect in rects)
-                    {
-                        //g.DrawRectangle(RectPen, rect.X, rect.Y, rect.Width, rect.Height);
-                        DrawPoint(g, Brushes.Cyan, rect.Center(), 2);
-                    }
+                    // Draw the frame image over the output image
+                    g.DrawImageUnscaled(frameCrop, 0, 0);
+                    
+                    // Detected points
+//                    foreach (var rect in rects)
+//                    {
+//                        g.DrawRectangle(RectPen, rect.X, rect.Y, rect.Width, rect.Height);
+//                        DrawPoint(g, Brushes.Cyan, rect.Center(), 2);
+//                    }
 
+                    // Draw the stick figure
                     var points = rects.Select(r => r.Center()).ToArray();
                     for (var j = 0; j < points.Length - 1; j++)
                     {
                         g.DrawLine(StickPen, points[j], points[j+1]);
                     }
 
-                    foreach (var kv in pcms)
-                    {
-                        DrawPoint(g, Brushes.Red, kv.Value, 2);
-                    }
+                    // PCMs for each separate body part
+//                    foreach (var kv in pcms)
+//                    {
+//                        DrawPoint(g, Brushes.Red, kv.Value, 2);
+//                    }
                     
-                    DrawPoint(g, Brushes.Orange, gcm, 4);
+                    // Ankle, knee, hip PCMs
+                    DrawPoint(g, Brushes.Orange, anklePcm, 4);
+                    DrawPoint(g, Brushes.Green, kneePcm, 4);
+                    DrawPoint(g, Brushes.Blue, hipPcm, 4);
+     
+                    // Global center of mass
+                    DrawPoint(g, Brushes.Red, gcm, 5);
                 }
                 
                 var outFile = Path.Combine(outDir, $"{ii}_annotated.jpg");
-                var frameCrop = frame.Clone(crop, frame.PixelFormat);
-                //DrawGrid(frameCrop, 20 * ppcm);
-                frameCrop.Save(outFile);
+                DrawGrid(output, 40, ppcm);
+                output.Save(outFile);
             }
             
             csv.Dispose();
@@ -262,27 +290,41 @@ namespace PointTracker
             var cy = center.Y;
             g.FillEllipse(brush, cx - radius, cy - 0.5f * radius, 2 * radius, 2 * radius);
         }
-        
+
         /// <summary>
         /// Draws a grid over the given graphics image
         /// </summary>
-        /// <param name="g"></param>
-        /// <param name="spacing"></param>
-        private static void DrawGrid(Bitmap b, float spacing)
+        /// <param name="b"></param>
+        /// <param name="cmSpacing"></param>
+        /// <param name="pixelsPerCm"></param>
+        private static void DrawGrid(Bitmap b, int cmSpacing, float pixelsPerCm)
         {
+            var spacing = pixelsPerCm * cmSpacing;
             var aq = Color.Aquamarine;
             var color = Color.FromArgb(150, aq.R, aq.G, aq.B);
             var gridPen = new Pen(color, 1);
+            var font = new Font("Menlo", 6);
+            
             using (var g = Graphics.FromImage(b))
             {
+                var xs = 0;
                 for (float x = 0; x < b.Width; x += spacing)
                 {
                     g.DrawLine(gridPen, x, 0, x, b.Height);
+                    if (xs > 0)
+                    {
+                        g.DrawString($"{xs/100.0:0.0}m", font, Brushes.Black, x + 5, b.Height - 10);   
+                    }
+                    xs += cmSpacing;
                 }
-                
-                for (float y = 0; y < b.Height; y += spacing)
+
+                var ys = 0;
+                for (float y = b.Height; y >= 0; y -= spacing)
                 {
                     g.DrawLine(gridPen, 0, y, b.Width, y);
+                    g.DrawString($"{ys/100.0:0.0}m", font, Brushes.Black, 5, y - 10);
+                    
+                    ys += cmSpacing;
                 }
             }
         }
