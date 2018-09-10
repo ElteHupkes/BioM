@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using Accord.Imaging;
@@ -174,6 +175,14 @@ namespace PointTracker
                 rects.Add(adjustedBox);
                 names.Add(name);
             }
+
+            var coverScale = 8f;
+            var coverImage = new Bitmap(IntRound(coverScale * crop.Width), IntRound(coverScale * crop.Height), 
+                PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(coverImage))
+            {
+                g.FillRectangle(Brushes.White, 0, 0, coverImage.Width, coverImage.Height);
+            }
             
             // Class that calculates partial centers of mass
             var pcmCalculator = new CmCalculator();
@@ -241,6 +250,8 @@ namespace PointTracker
                 csv.WriteFrame("knee", i, kneePcm, kneeWeight, pcmCalculator.GetLocation("Knee"));
                 csv.WriteFrame("hip", i, hipPcm, hipWeight, pcmCalculator.GetLocation("Hip"));
                 
+                var points = rects.Select(r => r.Center()).ToArray();
+                
                 // Draw resulting rectangles
                 using (var g = Graphics.FromImage(output))
                 {
@@ -255,7 +266,6 @@ namespace PointTracker
 //                    }
 
                     // Draw the stick figure
-                    var points = rects.Select(r => r.Center()).ToArray();
                     for (var j = 0; j < points.Length - 1; j++)
                     {
                         g.DrawLine(StickPen, points[j], points[j+1]);
@@ -276,11 +286,15 @@ namespace PointTracker
                     DrawPoint(g, Brushes.Red, gcm, 5);
                 }
                 
+                UpdateCover(coverImage, i, coverScale, names, points, gcm);
+                
                 var outFile = Path.Combine(outDir, $"{ii}_annotated.jpg");
                 DrawGrid(output, 40, ppcm);
                 output.Save(outFile);
             }
-            
+
+            var coverOut = Path.Combine(outDir, "cover.jpg");
+            coverImage.Save(coverOut);
             csv.Dispose();
         }
 
@@ -326,6 +340,51 @@ namespace PointTracker
                     
                     ys += cmSpacing;
                 }
+            }
+        }
+
+        private static void UpdateCover(Bitmap cover, int frame, 
+            float scale, List<string> names, PointF[] points, PointF gcm)
+        {
+            // Use rainbow colors
+            // https://stackoverflow.com/questions/10731147/evenly-distributed-color-range-depending-on-a-count
+            var fac = frame / 20.0f;
+            var phi = fac * 2 * Math.PI;
+            var u = Math.Cos(phi);
+            var v = Math.Sin(phi);
+            var y = 0.5;
+            var r = Math.Min(1, Math.Max(0, y + v / 0.88));
+            var g = Math.Min(1, Math.Max(0, y - 0.38 * u - 0.58 * v));
+            var b = Math.Min(1, Math.Max(0, y + u / 0.49));
+            var a = 1.0 - frame * (0.9 / 20);
+
+            var color = Color.FromArgb(255, (int) (r * 255), (int) (g * 255), (int) (b * 255));
+            var pen = new Pen(color, 6);
+            
+            using (var graphics = Graphics.FromImage(cover))
+            {
+                for (var j = 0; j < points.Length - 1; j++)
+                {
+                    var p1 = new PointF(points[j].X * scale, points[j].Y * scale);
+                    var p2 = new PointF(points[j+1].X * scale, points[j+1].Y * scale);
+                    graphics.DrawLine(pen, p1, p2);
+                }
+                
+                // Draw something that looks like a head
+                var si = names.IndexOf("Shoulder");
+                var shoulder = points[si];
+
+                var hw = 20 * scale;
+                var hh = 40 * scale;
+                var bounds = new RectangleF(shoulder.X * scale - 0.5f * hw, shoulder.Y * scale - hh, hw, hh);
+                graphics.DrawEllipse(pen, bounds);
+                
+//                var ps1 = new PointF(shoulder.X * scale, shoulder.Y * scale);
+//                var ps2 = new PointF(shoulder.X * scale, shoulder.Y * scale - 30 * scale);
+//                graphics.DrawLine(pen, ps1, ps2);
+                
+                var sgcm = new PointF(scale * gcm.X, scale * gcm.Y);
+                DrawPoint(graphics, Brushes.Red, sgcm, 20);
             }
         }
         
